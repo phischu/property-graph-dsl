@@ -17,6 +17,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Database.PropertyGraph,
+                       Database.PropertyGraph.Internal,
                        Database.PropertyGraph.Geoff,
                        Database.PropertyGraph.Neo4jBatch
   -- other-modules:       
