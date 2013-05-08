@@ -1,3 +1,4 @@
+{-# LANGUAGE StandaloneDeriving #-}
 module Database.PropertyGraph.Neo4jBatch (
     convertPropertyGraphToNeo4jBatch,
     add,ServerAddress,Neo4jBatchError,InteractionError) where
@@ -52,7 +53,7 @@ interpretPropertyGraph (Free (NewVertex properties c)) = do
 
     interpretPropertyGraph (c vertexid)
 
-interpretPropertyGraph (Free (NewEdge properties label from to c)) = do
+interpretPropertyGraph (Free (NewEdge properties label (VertexId from) (VertexId to) c)) = do
 
     edgeid <- lift (modify (+1) >> get) >>= return . EdgeId
 
@@ -95,10 +96,14 @@ data Neo4jBatchError = URIError String |
                        ResponseCodeError (Int,Int,Int) ByteString |
                        ResponseParseError String
 
+deriving instance Show Neo4jBatchError
+
 -- | Things that can go wrong when doing an http interaction.
 data InteractionError = UnexpectedError String |
                         ConnectionError ConnError |
-                        RetrievalError String deriving Show
+                        RetrievalError String
+
+deriving instance Show InteractionError
 
 type Body s = s
 
