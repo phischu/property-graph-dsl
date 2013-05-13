@@ -21,7 +21,7 @@ import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as B (length)
 
 import Network.Http.Client
-    (Hostname,Port,withConnection,openConnection,
+    (Hostname,Port,openConnection,closeConnection,
      buildRequest,http,Method(POST),setAccept,setContentType,
      sendRequest,inputStreamBody,
      receiveResponse)
@@ -71,8 +71,9 @@ interpretPropertyGraph (Free (NewEdge properties label (VertexId from) (VertexId
 
 -- | Add a property graph to a neo4j database.
 add :: Hostname -> Port -> PropertyGraph a -> IO (Either Neo4jBatchError ())
-add hostname port propertygraph = withConnection (openConnection hostname port) (\connection -> (do
-        runEitherT (do
+add hostname port propertygraph = runEitherT ((do
+
+            connection <- tryIO (openConnection hostname port) `onFailure` OpeningConnectionError
 
             request <- tryIO (buildRequest (do
                 http POST (pack "/db/data/batch")
@@ -87,13 +88,16 @@ add hostname port propertygraph = withConnection (openConnection hostname port) 
 
             tryIO (receiveResponse connection (\response responsebody -> (do
                 connect responsebody stdout))) `onFailure` ResponseReceivalError
-            )))
+
+            tryIO (closeConnection connection) `onFailure` ConnectionClosingError))
 
 -- | Things that can go wrong when submitting a property graph to a neo4j database.
-data Neo4jBatchError = RequestBuildingError IOException |
+data Neo4jBatchError = OpeningConnectionError IOException |
+                       RequestBuildingError IOException |
                        EncodingError IOException |
                        RequestSendingError IOException |
                        ResponseReceivalError IOException |
+                       ConnectionClosingError IOException |
                        ResponseCodeError (Int,Int,Int) ByteString |
                        ResponseParseError String
 
