@@ -1,7 +1,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 module Database.PropertyGraph.Neo4jBatch (
     convertPropertyGraphToNeo4jBatch,
-    add,ServerAddress,Neo4jBatchError,InteractionError) where
+    add,Neo4jBatchError) where
 
 import Database.PropertyGraph.Internal (PropertyGraph,PG,PropertyGraphF(NewVertex,NewEdge),VertexId(VertexId),EdgeId(EdgeId))
 
@@ -16,18 +16,18 @@ import Control.Exception (IOException)
 import qualified Data.Map as Map (fromList)
 import qualified Data.Vector as Vector (fromList)
 import Data.Text (Text,unpack)
+import Data.ByteString.Char8 (pack)
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as B (length)
 
-import Network.HTTP (Request(Request),simpleHTTP,getResponseCode,getResponseBody)
-import Network.HTTP.Base (ResponseCode,RequestMethod(POST))
-import Network.HTTP.Headers (mkHeader,HeaderName(HdrContentLength,HdrContentType,HdrAccept))
-import Network.URI (URI,parseAbsoluteURI,parseRelativeReference,relativeTo)
-import Network.TCP (HStream)
-import Network.Stream (ConnError)
-
--- | The address of a neo4j server for example "http://localhost:7474"
-type ServerAddress = Text
+import Network.Http.Client
+    (Hostname,Port,withConnection,openConnection,
+     buildRequest,http,Method(POST),setAccept,setContentType,
+     sendRequest,inputStreamBody,
+     receiveResponse)
+import System.IO.Streams (connect)
+import System.IO.Streams.Handle (stdout)
+import System.IO.Streams.ByteString (fromLazyByteString)
 
 -- | Convert a given property graph to the equivalent body of a neo4j batch request.
 convertPropertyGraphToNeo4jBatch :: PropertyGraph a -> JSON.Value
@@ -70,35 +70,35 @@ interpretPropertyGraph (Free (NewEdge properties label (VertexId from) (VertexId
     interpretPropertyGraph (c edgeid)
 
 -- | Add a property graph to a neo4j database.
-add :: ServerAddress -> PropertyGraph a -> IO (Either Neo4jBatchError JSON.Value)
-add serveraddress propertygraph = runEitherT (do
+add :: Hostname -> Port -> PropertyGraph a -> IO (Either Neo4jBatchError ())
+add hostname port propertygraph = withConnection (openConnection hostname port) (\connection -> (do
+        runEitherT (do
 
-    serveruri <- noteT (URIError "Failed to parse Server Address") (hoistMaybe (parseAbsoluteURI (unpack serveraddress)))
-    apiuri    <- noteT (URIError "Failed to parse API Address")    (hoistMaybe (parseRelativeReference "db/data/batch"))
+            request <- tryIO (buildRequest (do
+                http POST (pack "/db/data/batch")
+                setAccept (pack "application/json")
+                setContentType (pack "application/json")
+                )) `onFailure` RequestBuildingError
 
-    let request = Request uri verb headers requestbody
-        uri = (apiuri `relativeTo` serveruri)
-        verb = POST
-        headers = [
-            mkHeader HdrAccept "application/json",
-            mkHeader HdrContentType "application/json",
-            mkHeader HdrContentLength (show (B.length requestbody))]
-        requestbody = JSON.encode (convertPropertyGraphToNeo4jBatch propertygraph)
+            bodyInputStream <- tryIO (fromLazyByteString (JSON.encode (
+                convertPropertyGraphToNeo4jBatch propertygraph))) `onFailure` EncodingError
 
-    (code,responsebody) <- webInteract request `onFailure` InteractionError
+            tryIO (sendRequest connection request (inputStreamBody bodyInputStream)) `onFailure` RequestSendingError
 
-    case code of
-        (2,_,_) -> hoistEither (JSON.eitherDecode responsebody) `onFailure` ResponseParseError
-        _       -> left (ResponseCodeError code responsebody))
+            tryIO (receiveResponse connection (\response responsebody -> (do
+                connect responsebody stdout))) `onFailure` ResponseReceivalError
+            )))
 
 -- | Things that can go wrong when submitting a property graph to a neo4j database.
-data Neo4jBatchError = URIError String |
-                       InteractionError InteractionError |
+data Neo4jBatchError = RequestBuildingError IOException |
+                       EncodingError IOException |
+                       RequestSendingError IOException |
+                       ResponseReceivalError IOException |
                        ResponseCodeError (Int,Int,Int) ByteString |
                        ResponseParseError String
 
 deriving instance Show Neo4jBatchError
-
+{-
 -- | Things that can go wrong when doing an http interaction.
 data InteractionError = UnexpectedError IOException |
                         ConnectionError ConnError |
@@ -115,7 +115,7 @@ webInteract request = do
     code     <- tryIO (getResponseCode (Right response)) `onFailure` RetrievalError
     body     <- tryIO (getResponseBody (Right response)) `onFailure` RetrievalError
     return (code,body)
-
+-}
 onFailure :: Monad m => EitherT a m r -> (a -> b) -> EitherT b m r
 onFailure = flip fmapLT
 

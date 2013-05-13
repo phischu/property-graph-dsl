@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                property-graph-dsl
-version:             0.2.1.7
+version:             0.2.2.0
 synopsis:            A DSL for defining property graphs
 -- description:         
 homepage:            userpages.uni-koblenz.de/~pschuster
@@ -28,7 +28,8 @@ library
                        aeson,
                        errors,
                        network,
-                       HTTP,
+                       http-streams,
+                       io-streams,
                        bytestring,
                        vector,
                        mtl
