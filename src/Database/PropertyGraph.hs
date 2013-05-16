@@ -1,6 +1,6 @@
 {-# LANGUAGE StandaloneDeriving, DeriveFunctor #-}
 module Database.PropertyGraph (
-	PropertyGraph,PG,
+	PropertyGraph,PropertyGraphT,
 	newVertex,newEdge,
 	Properties,Key,Value,
 	VertexId,EdgeId,Label) where
