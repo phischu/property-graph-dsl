@@ -1,13 +1,13 @@
 {-# LANGUAGE StandaloneDeriving #-}
 module Database.PropertyGraph.Neo4jBatch (
-    convertPropertyGraphToNeo4jBatch,
+    convertPropertyGraphToNeo4jBatch,runPropertyGraphT,
     add,Neo4jBatchError) where
 
 import Database.PropertyGraph.Internal (PropertyGraphT,PropertyGraph,PropertyGraphF(NewVertex,NewEdge),VertexId(VertexId),EdgeId(EdgeId))
 
 import qualified Data.Aeson as JSON (Value(Array),eitherDecode,encode,toJSON,json)
 
-import Control.Monad.Writer.Lazy (WriterT,execWriterT,tell)
+import Control.Monad.Writer.Lazy (WriterT,runWriterT,tell)
 import Control.Monad.State.Lazy (StateT,evalStateT,modify,get,lift)
 import Control.Monad.Identity (Identity,runIdentity)
 import Control.Monad.Trans.Free (FreeF(Pure,Free),runFreeT)
@@ -31,12 +31,15 @@ import System.IO.Streams.Attoparsec (parseFromStream)
 
 -- | Convert a given property graph to the equivalent body of a neo4j batch request.
 convertPropertyGraphToNeo4jBatch :: PropertyGraph a -> JSON.Value
-convertPropertyGraphToNeo4jBatch =
-    JSON.Array .
-    Vector.fromList .
-    runIdentity .
+convertPropertyGraphToNeo4jBatch = snd . runIdentity . runPropertyGraphT
+
+-- | Run a property graph transformer and yield the corresponding property graph
+--   as the second part of the result.
+runPropertyGraphT :: (Monad m,Functor m) => PropertyGraphT m a -> m (a,JSON.Value)
+runPropertyGraphT =
+    fmap (fmap (JSON.Array . Vector.fromList)) .
     flip evalStateT 0 .
-    execWriterT .
+    runWriterT .
     interpretPropertyGraph
 
 interpretPropertyGraph :: (Monad m) => PropertyGraphT m a -> WriterT [JSON.Value] (StateT Integer m) a
