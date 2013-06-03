@@ -21,8 +21,8 @@ import Control.Monad.Trans (lift)
 import Control.Monad.IO.Class (MonadIO,liftIO)
 
 -- | Insert a property graph into a neo4j databse.
-runPropertyGraphT :: (MonadIO m) => PropertyGraphT m a -> Client -> EitherT Neo4jSingleError m a
-runPropertyGraphT propertygraph client = do
+runPropertyGraphT :: (MonadIO m) => Client -> PropertyGraphT m a -> EitherT Neo4jSingleError m a
+runPropertyGraphT client propertygraph = do
 
     next <- lift (runFreeT propertygraph)
 
@@ -32,7 +32,7 @@ runPropertyGraphT propertygraph client = do
 
         Free (NewVertex properties continue) -> do
             node <- liftIO (createNode client (toList properties)) >>= either (left . NodeCreationError) return
-            runPropertyGraphT (continue (VertexId (getNodeID node))) client
+            runPropertyGraphT client (continue (VertexId (getNodeID node)))
 
         Free (NewEdge properties label (VertexId from) (VertexId to) continue) -> do
             fromNode <- liftIO (lookupNode client from)
@@ -41,7 +41,7 @@ runPropertyGraphT propertygraph client = do
                 >>= either (left . NodeLookupError) return
             liftIO (createRelationship client fromNode toNode (unpack label) (toList properties))
                 >>= either (left . RelationshipCreationError) return
-            runPropertyGraphT continue client
+            runPropertyGraphT client continue
 
 -- | The different kinds of errors that may occure during insertion of a property
 --   graph into a neo4j database.
