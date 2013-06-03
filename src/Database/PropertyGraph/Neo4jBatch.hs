@@ -34,7 +34,7 @@ convertPropertyGraphToNeo4jBatch :: PropertyGraph a -> JSON.Value
 convertPropertyGraphToNeo4jBatch = snd . runIdentity . runPropertyGraphT
 
 -- | Run a property graph transformer and yield the corresponding property graph
---   as the second part of the result.
+--   as a batch request suitable for neo4j as the second part of the result.
 runPropertyGraphT :: (Monad m,Functor m) => PropertyGraphT m a -> m (a,JSON.Value)
 runPropertyGraphT =
     fmap (fmap (JSON.Array . Vector.fromList)) .
@@ -42,8 +42,10 @@ runPropertyGraphT =
     runWriterT .
     interpretPropertyGraph
 
+-- | Interpret a property graph as the list of neo4j requests and a running unique Id.
 interpretPropertyGraph :: (Monad m) => PropertyGraphT m a -> WriterT [JSON.Value] (StateT Integer m) a
 interpretPropertyGraph propertygraph = do
+
     next <- lift (lift (runFreeT propertygraph))
 
     case next of
@@ -71,11 +73,13 @@ interpretPropertyGraph propertygraph = do
                     ("data"  ,JSON.toJSON properties         )]))])]
             interpretPropertyGraph (continue edgeid)
 
--- | Add a property graph to a neo4j database.
+-- | Issue a JSON value representing a neo4j batch request to a neo4j database.
+--   Return the decoded response.
 add :: Hostname -> Port -> JSON.Value -> IO (Either Neo4jBatchError JSON.Value)
 add hostname port neo4jbatch = runEitherT (do
 
-            connection <- tryIO (openConnection hostname port) `onFailure` OpeningConnectionError
+            connection <- tryIO (openConnection hostname port)
+                `onFailure` OpeningConnectionError
 
             request <- tryIO (buildRequest (do
                 http POST (pack "/db/data/batch")
@@ -83,15 +87,18 @@ add hostname port neo4jbatch = runEitherT (do
                 setContentType (pack "application/json")
                 )) `onFailure` RequestBuildingError
 
-            bodyInputStream <- tryIO (fromLazyByteString (JSON.encode (
-                neo4jbatch))) `onFailure` EncodingError
+            bodyInputStream <- tryIO (fromLazyByteString (JSON.encode (neo4jbatch)))
+                `onFailure` EncodingError
 
-            tryIO (sendRequest connection request (inputStreamBody bodyInputStream)) `onFailure` RequestSendingError
+            tryIO (sendRequest connection request (inputStreamBody bodyInputStream))
+                `onFailure` RequestSendingError
 
-            jsonvalue <- tryIO (receiveResponse connection (\response responsebody -> (do
-                parseFromStream JSON.json responsebody))) `onFailure` ResponseReceivalError
+            jsonvalue <- tryIO (receiveResponse connection (\_ responsebody -> (do
+                parseFromStream JSON.json responsebody)))
+                `onFailure` ResponseReceivalError
 
-            tryIO (closeConnection connection) `onFailure` ConnectionClosingError
+            tryIO (closeConnection connection)
+                `onFailure` ConnectionClosingError
 
             return jsonvalue)
 
