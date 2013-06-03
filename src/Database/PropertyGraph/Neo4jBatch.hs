@@ -1,25 +1,24 @@
 {-# LANGUAGE StandaloneDeriving #-}
 module Database.PropertyGraph.Neo4jBatch (
     convertPropertyGraphToNeo4jBatch,runPropertyGraphT,
-    add,Neo4jBatchError) where
+    add,Neo4jBatchError(..)) where
 
-import Database.PropertyGraph.Internal (PropertyGraphT,PropertyGraph,PropertyGraphF(NewVertex,NewEdge),VertexId(VertexId),EdgeId(EdgeId))
+import Database.PropertyGraph.Internal (
+    PropertyGraphT,PropertyGraph,
+    PropertyGraphF(NewVertex,NewEdge),VertexId(VertexId))
 
-import qualified Data.Aeson as JSON (Value(Array),eitherDecode,encode,toJSON,json)
+import qualified Data.Aeson as JSON (Value(Array),encode,toJSON,json)
 
 import Control.Monad.Writer.Lazy (WriterT,runWriterT,tell)
 import Control.Monad.State.Lazy (StateT,evalStateT,modify,get,lift)
 import Control.Monad.Identity (Identity,runIdentity)
 import Control.Monad.Trans.Free (FreeF(Pure,Free),runFreeT)
-import Control.Error (EitherT,runEitherT,tryIO,hoistEither,fmapLT,noteT,hoistMaybe,left)
+import Control.Error (EitherT,runEitherT,tryIO,fmapLT)
 import Control.Exception (IOException)
 
 import qualified Data.Map as Map (fromList)
 import qualified Data.Vector as Vector (fromList)
-import Data.Text (Text,unpack)
 import Data.ByteString.Char8 (pack)
-import Data.ByteString.Lazy (ByteString)
-import qualified Data.ByteString.Lazy.Char8 as B (length)
 
 import Network.Http.Client
     (Hostname,Port,openConnection,closeConnection,
@@ -62,16 +61,16 @@ interpretPropertyGraph propertygraph = do
             interpretPropertyGraph (continue vertexid)
 
         Free (NewEdge properties label (VertexId from) (VertexId to) continue) -> do
-            edgeid <- lift (modify (+1) >> get) >>= return . EdgeId
+            runningid <- lift (modify (+1) >> get) >>= return
             tell [JSON.toJSON (Map.fromList [
                 ("method",JSON.toJSON "POST"                             ),
                 ("to"    ,JSON.toJSON ("{"++show from++"}/relationships")),
-                ("id"    ,JSON.toJSON edgeid                             ),
+                ("id"    ,JSON.toJSON runningid                             ),
                 ("body"  ,JSON.toJSON (Map.fromList [
                     ("to"    ,JSON.toJSON ("{"++show to++"}")),
                     ("type"  ,JSON.toJSON label              ),
                     ("data"  ,JSON.toJSON properties         )]))])]
-            interpretPropertyGraph (continue edgeid)
+            interpretPropertyGraph continue
 
 -- | Issue a JSON value representing a neo4j batch request to a neo4j database.
 --   Return the decoded response.

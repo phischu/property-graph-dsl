@@ -1,5 +1,7 @@
+{-# LANGUAGE StandaloneDeriving #-}
 module Database.PropertyGraph.Neo4jSingle (
-    runPropertyGraphT) where
+    runPropertyGraphT,
+    Neo4jSingleError(..)) where
 
 import Database.PropertyGraph.Internal (
     PropertyGraphT,PropertyGraphF(NewVertex,NewEdge),
@@ -18,6 +20,7 @@ import Data.Text (unpack)
 import Control.Monad.Trans (lift)
 import Control.Monad.IO.Class (MonadIO,liftIO)
 
+-- | Insert a property graph into a neo4j databse.
 runPropertyGraphT :: (MonadIO m) => PropertyGraphT m a -> Client -> EitherT Neo4jSingleError m a
 runPropertyGraphT propertygraph client = do
 
@@ -32,14 +35,18 @@ runPropertyGraphT propertygraph client = do
             runPropertyGraphT (continue (VertexId (getNodeID node))) client
 
         Free (NewEdge properties label (VertexId from) (VertexId to) continue) -> do
-            fromNode <- liftIO (lookupNode client from) >>= either (left . NodeLookupError) return
-            toNode   <- liftIO (lookupNode client to)   >>= either (left . NodeLookupError) return
+            fromNode <- liftIO (lookupNode client from)
+                >>= either (left . NodeLookupError) return
+            toNode   <- liftIO (lookupNode client to)
+                >>= either (left . NodeLookupError) return
             liftIO (createRelationship client fromNode toNode (unpack label) (toList properties))
+                >>= either (left . RelationshipCreationError) return
             runPropertyGraphT continue client
 
-
-    return undefined
-
+-- | The different kinds of errors that may occure during insertion of a property
+--   graph into a neo4j database.
 data Neo4jSingleError = NodeCreationError String
+                      | RelationshipCreationError String
                       | NodeLookupError String
 
+deriving instance Show Neo4jSingleError
