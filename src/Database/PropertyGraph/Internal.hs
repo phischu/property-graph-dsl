@@ -36,7 +36,7 @@ type Value = JSON.Value
 
 -- | A unique identifier for vertices. Internally an Integer but
 --   kept abstract to prevent disaster.
-newtype VertexId = VertexId Integer
+newtype VertexId = VertexId { unVertexId :: Integer }
 
 -- | Each edge is required to have a textual label.
 type Label = Text

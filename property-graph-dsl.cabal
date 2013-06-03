@@ -19,7 +19,8 @@ library
   exposed-modules:     Database.PropertyGraph,
                        Database.PropertyGraph.Internal,
                        Database.PropertyGraph.Neo4jSingle,
-                       Database.PropertyGraph.Neo4jBatch
+                       Database.PropertyGraph.Neo4jBatch,
+                       Database.PropertyGraph.Neo4jChunked
   -- other-modules:       
   build-depends:       base,
                        containers,
@@ -34,6 +35,7 @@ library
                        vector,
                        mtl,
                        transformers,
-                       neo4j-haskell
+                       neo4j-haskell,
+                       pipes
   hs-source-dirs:      src
   default-language:    Haskell2010

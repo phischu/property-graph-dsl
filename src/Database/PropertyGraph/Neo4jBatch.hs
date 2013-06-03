@@ -1,11 +1,13 @@
 {-# LANGUAGE StandaloneDeriving #-}
 module Database.PropertyGraph.Neo4jBatch (
     convertPropertyGraphToNeo4jBatch,runPropertyGraphT,
-    add,Neo4jBatchError(..)) where
+    add,Neo4jBatchError(..),
+    vertexRequest,edgeRequest) where
 
 import Database.PropertyGraph.Internal (
     PropertyGraphT,PropertyGraph,
-    PropertyGraphF(NewVertex,NewEdge),VertexId(VertexId))
+    PropertyGraphF(NewVertex,NewEdge),VertexId(VertexId),
+    Properties,Label)
 
 import qualified Data.Aeson as JSON (Value(Array),encode,toJSON,json)
 
@@ -17,8 +19,10 @@ import Control.Error (EitherT,runEitherT,tryIO,fmapLT)
 import Control.Exception (IOException)
 
 import qualified Data.Map as Map (fromList)
+import Data.Monoid ((<>))
 import qualified Data.Vector as Vector (fromList)
-import Data.ByteString.Char8 (pack)
+import Data.Text (Text,pack)
+import qualified Data.ByteString.Char8 as BS (pack)
 
 import Network.Http.Client
     (Hostname,Port,openConnection,closeConnection,
@@ -52,25 +56,37 @@ interpretPropertyGraph propertygraph = do
         Pure x -> return x
 
         Free (NewVertex properties continue) -> do
-            vertexid <- lift (modify (+1) >> get) >>= return . VertexId
-            tell [JSON.toJSON (Map.fromList [
-                ("method",JSON.toJSON "POST"    ),
-                ("to"    ,JSON.toJSON "/node"   ),
-                ("id"    ,JSON.toJSON vertexid  ),
-                ("body"  ,JSON.toJSON properties)])]
-            interpretPropertyGraph (continue vertexid)
+            VertexId vertexid <- lift (modify (+1) >> get) >>= return . VertexId
+            tell [vertexRequest properties vertexid]
+            interpretPropertyGraph (continue (VertexId vertexid))
 
         Free (NewEdge properties label (VertexId from) (VertexId to) continue) -> do
             runningid <- lift (modify (+1) >> get) >>= return
-            tell [JSON.toJSON (Map.fromList [
-                ("method",JSON.toJSON "POST"                             ),
-                ("to"    ,JSON.toJSON ("{"++show from++"}/relationships")),
-                ("id"    ,JSON.toJSON runningid                             ),
-                ("body"  ,JSON.toJSON (Map.fromList [
-                    ("to"    ,JSON.toJSON ("{"++show to++"}")),
-                    ("type"  ,JSON.toJSON label              ),
-                    ("data"  ,JSON.toJSON properties         )]))])]
+            let tempid x = pack ("{" ++ show x ++ "}")
+            tell [edgeRequest properties label (tempid from) (tempid to) runningid]
             interpretPropertyGraph continue
+
+-- | Part of a Neo4j batch request. Create a new vertex with the given properties
+--   and temporary id.
+vertexRequest :: Properties -> Integer -> JSON.Value
+vertexRequest properties uniqueid = JSON.toJSON (Map.fromList [
+    ("method",JSON.toJSON "POST"         ),
+    ("to"    ,JSON.toJSON "/node"        ),
+    ("id"    ,JSON.toJSON (show uniqueid)),
+    ("body"  ,JSON.toJSON properties     )])
+
+-- | Part of a Neo4j batch request. Create a new edge with the given properties,
+--   label, from the given uri to the other given uri with the given temporary
+--   id.
+edgeRequest :: Properties -> Label -> Text -> Text -> Integer -> JSON.Value
+edgeRequest properties label fromuri touri uniqueid = JSON.toJSON (Map.fromList [
+    ("method",JSON.toJSON "POST"                     ),
+    ("to"    ,JSON.toJSON (fromuri<>(pack "/relationships"))),
+    ("id"    ,JSON.toJSON (show uniqueid)            ),
+    ("body"  ,JSON.toJSON (Map.fromList [
+        ("to"    ,JSON.toJSON touri     ),
+        ("type"  ,JSON.toJSON label     ),
+        ("data"  ,JSON.toJSON properties)]))])
 
 -- | Issue a JSON value representing a neo4j batch request to a neo4j database.
 --   Return the decoded response.
@@ -81,9 +97,9 @@ add hostname port neo4jbatch = runEitherT (do
                 `onFailure` OpeningConnectionError
 
             request <- tryIO (buildRequest (do
-                http POST (pack "/db/data/batch")
-                setAccept (pack "application/json")
-                setContentType (pack "application/json")
+                http POST (BS.pack "/db/data/batch")
+                setAccept (BS.pack "application/json")
+                setContentType (BS.pack "application/json")
                 )) `onFailure` RequestBuildingError
 
             bodyInputStream <- tryIO (fromLazyByteString (JSON.encode (neo4jbatch)))
