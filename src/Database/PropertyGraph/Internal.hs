@@ -9,6 +9,7 @@ import Data.Text (Text)
 import Data.Map (Map)
 
 import Data.Aeson (ToJSON)
+import qualified Data.Aeson as JSON (Value)
 
 -- | A monadic property graph dsl. A property graph consists of
 --   vertices and edges each with properties. Edges also must have
@@ -31,7 +32,7 @@ type Properties = Map Key Value
 type Key = Text
 
 -- | Currently property values must be textual as well.
-type Value = Text
+type Value = JSON.Value
 
 -- | A unique identifier for vertices. Internally an Integer but
 --   kept abstract to prevent disaster.
