@@ -21,7 +21,7 @@ type PropertyGraph = PropertyGraphT Identity
 type PropertyGraphT = FreeT PropertyGraphF
 
 data PropertyGraphF a =
-	NewVertex Properties (VertexId -> a) |
+	NewVertex Properties (TemporaryId -> a) |
 	NewEdge Properties Label VertexId VertexId a
 
 -- | The properties of either a vertex or an edge. Represented as
@@ -36,18 +36,21 @@ type Value = JSON.Value
 
 -- | A unique identifier for vertices. Internally an Integer but
 --   kept abstract to prevent disaster.
-newtype VertexId = VertexId { unVertexId :: Integer }
+data VertexId = Temporary TemporaryId
+              | Permanent PermanentUri deriving (Show,Ord,Eq)
+
+data TemporaryId = TemporaryId Integer deriving (Show,Ord,Eq)
+data PermanentUri = PermanentUri Text deriving (Show,Ord,Eq)
 
 -- | Each edge is required to have a textual label.
 type Label = Text
 
 deriving instance Functor PropertyGraphF
-deriving instance ToJSON  VertexId
 
 -- | Within the property graph monad create a new vertex with the
 --   given properties. The resulting 'VertexId' can be bound and used
 --   subsequently.
-newVertex :: (Monad m) => Properties -> PropertyGraphT m VertexId
+newVertex :: (Monad m) => Properties -> PropertyGraphT m TemporaryId
 newVertex properties = liftF (NewVertex properties id)
 
 -- | Withing the property graph monad create a new edge with the given

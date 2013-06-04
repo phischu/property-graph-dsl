@@ -1,11 +1,12 @@
 {-# LANGUAGE StandaloneDeriving #-}
-module Database.PropertyGraph.Neo4jSingle (
+
+module Database.PropertyGraph.Neo4jSingle where {-(
     runPropertyGraphT,
     Neo4jSingleError(..)) where
 
 import Database.PropertyGraph.Internal (
     PropertyGraphT,PropertyGraphF(NewVertex,NewEdge),
-    VertexId(VertexId))
+    VertexId(Permanent),PermanentUri(PermanentUri))
 
 import Database.Neo4j (
     Client,createNode,createRelationship,
@@ -32,9 +33,9 @@ runPropertyGraphT client propertygraph = do
 
         Free (NewVertex properties continue) -> do
             node <- liftIO (createNode client (toList properties)) >>= either (left . NodeCreationError) return
-            runPropertyGraphT client (continue (VertexId (getNodeID node)))
+            runPropertyGraphT client (continue (Permanent (PermanentId (getNodeID node))))
 
-        Free (NewEdge properties label (VertexId from) (VertexId to) continue) -> do
+        Free (NewEdge properties label (Permanent (PermanentId from)) (Permanent (PermanentId to)) continue) -> do
             fromNode <- liftIO (lookupNode client from)
                 >>= either (left . NodeLookupError) return
             toNode   <- liftIO (lookupNode client to)
@@ -50,3 +51,4 @@ data Neo4jSingleError = NodeCreationError String
                       | NodeLookupError String
 
 deriving instance Show Neo4jSingleError
+-}
