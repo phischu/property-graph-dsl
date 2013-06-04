@@ -7,10 +7,10 @@ import Database.PropertyGraph.Neo4jBatch (add,vertexRequest,edgeRequest)
 
 import Network.Http.Client (Hostname,Port)
 
-import Control.Proxy (Proxy,Producer,Consumer,liftP,request,respond,(>->),(>=>),toListD,unitU)
-import Control.Proxy.Trans.State (StateP,modify,get)
+import Control.Proxy (Proxy,Pipe,Producer,Consumer,liftP,request,respond,(>->),runProxy)
+import Control.Proxy.Trans.State (StateP,evalStateK,modify,get)
 
-import Control.Monad (forever)
+import Control.Monad (forever,replicateM)
 import Control.Monad.IO.Class (MonadIO,liftIO)
 import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Free (FreeF(Pure,Free),runFreeT)
@@ -25,10 +25,17 @@ import qualified Data.HashMap.Strict as HashMap (lookup)
 import qualified Data.Vector as Vector (foldM')
 import Data.Text (pack,unpack)
 
-import qualified Data.Aeson as JSON (Value(Array,Number,String,Object),json,toJSON)
+import qualified Data.Aeson as JSON (Value(Array,Number,String,Object),toJSON)
 import qualified Data.Attoparsec.Number as Attoparsec (Number(I))
 
 import Network.URI (parseURI,uriPath)
+
+-- | Insert a property graph into the given neo4j database in chunks of the given size.
+runPropertyGraphT :: (MonadIO m) => Hostname -> Port -> Int -> PropertyGraphT m r -> m r
+runPropertyGraphT hostname port n propertygraph = runProxy $ evalStateK Map.empty $ evalStateK 0 $
+    interpretPropertyGraphT propertygraph >->
+    chunk n >->
+    liftP . (insertPropertyGraphT hostname port)
 
 -- | Interpret a property graph as the list of neo4j requests and a running unique Id.
 interpretPropertyGraphT :: (Proxy p,Monad m) => PropertyGraphT m r -> () ->
@@ -101,4 +108,9 @@ extractIds (JSON.Object object) = do
     existingid <- hush (readErr "cannot read id" existingidstring)
     return (tempid,existingid)
 
-chunk p = (liftP . p >-> toListD >-> unitU) >=> respond
+-- | Divide a stream into chunks of the given size.
+chunk :: (Monad (p () a () [a] m),Proxy p,Monad m) => Int -> () -> Pipe p a [a] m r
+chunk n () = forever (do
+    xs <- replicateM n (request ())
+    respond xs)
+
