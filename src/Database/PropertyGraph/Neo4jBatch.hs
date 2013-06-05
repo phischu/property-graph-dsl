@@ -7,12 +7,13 @@ import Database.PropertyGraph.Internal (
     VertexId(VertexId),
     PropertyGraphF(NewVertex,NewEdge))
 
-import Control.Proxy (Proxy,Producer,Pipe,Consumer,Server,request,respond,lift,(>->),(>~>),runProxyK,toListD,mapD)
+import Control.Proxy (Proxy,Producer,Pipe,Consumer,Server,request,respond,lift,(>->),(>~>),runProxyK,toListD,mapD,unitU,foreverK)
 import Control.Proxy.Safe (ExceptionP,SafeIO,runEitherK,throw)
+import Control.Proxy.Parse (returnPull,unwrap,draw,drawAll,passUpTo,wrap)
 import qualified Control.Proxy.Safe as Proxy (tryIO)
 import Control.Proxy.Trans (liftP)
 import Control.Proxy.Morph (hoistP)
-import Control.Proxy.Trans.State (StateP,evalStateK,modify,get)
+import Control.Proxy.Trans.State (StateP,evalStateK,modify,get,evalStateP)
 import Control.Proxy.Trans.Writer (execWriterK)
 
 import Control.Monad (forever,mzero,replicateM,(>=>))
@@ -35,6 +36,7 @@ import qualified Data.Vector as Vector (mapM,toList,concat,singleton,empty)
 import qualified Data.Map as Map (union,fromList,lookup,empty)
 import Data.Data (Data)
 import Data.Typeable (Typeable)
+import Data.List (stripPrefix)
 
 import Network.Http.Client (
     Hostname,Port,openConnection,closeConnection,
@@ -69,9 +71,9 @@ data Neo4jBatchResponse = Neo4jBatchResponse (Maybe Integer) Text (Maybe Text) (
 
 runPropertyGraphT :: Hostname -> Port -> PropertyGraphT SafeIO r -> SafeIO (Either SomeException r)
 runPropertyGraphT hostname port propertygraph = runProxyK (runEitherK (
-    evalStateK 0 (interpretPropertyGraphT propertygraph) >->
+    wrap . (evalStateK 0 (interpretPropertyGraphT propertygraph)) >->
+    evalStateK [] (chunk 1000) >->
     evalStateK Map.empty replace >->
-    chunk >->
     (extract >~>
     consume "localhost" 7474))) []
 
@@ -150,7 +152,6 @@ instance FromJSON Neo4jBatchResponse where
         return (Neo4jBatchResponse temporaryid from location body)
     parseJSON _ = fail "response is not an object"
 
-
 vertexidURI :: AnyId -> Text
 vertexidURI (Temporary (TemporaryId vertexid)) = pack ("{" ++ show vertexid ++ "}")
 vertexidURI (Permanent (PermanentUri vertexuri)) = vertexuri
@@ -171,16 +172,19 @@ responseToParing :: Neo4jBatchResponse -> Either String [(TemporaryId,PermanentU
 responseToParing (Neo4jBatchResponse (Just temporaryid) _ (Just completeuri) _) = do
     case parseURI (unpack completeuri) of
         Nothing -> Left "couldn't parse uri"
-        Just uri -> return [(TemporaryId temporaryid,PermanentUri (pack (uriPath uri)))]
+        Just uri -> do
+            case stripPrefix "/db/data" (uriPath uri) of
+                Just permanenturi -> return [(TemporaryId temporaryid,PermanentUri (pack permanenturi))]
+                Nothing -> Left "uri path doesn't start with /db/data"
 responseToParing _ = Right []
 
 replace :: (Proxy p,Monad m) =>
-    x -> (StateP (Map TemporaryId PermanentUri) p) x Neo4jBatchRequest (Map TemporaryId PermanentUri) Neo4jBatchRequest m r
+    x -> (StateP (Map TemporaryId PermanentUri) p) x [Neo4jBatchRequest] (Map TemporaryId PermanentUri) [Neo4jBatchRequest] m r
 replace x = do
-    neo4jbatchrequest <- request x
+    neo4jbatchrequests <- request x
     temporaryidmap <- get
-    let neo4jbatchrequest' = replaceId temporaryidmap neo4jbatchrequest
-    temporaryidmap' <- respond neo4jbatchrequest'
+    let neo4jbatchrequests' = map (replaceId temporaryidmap) neo4jbatchrequests
+    temporaryidmap' <- respond neo4jbatchrequests'
     modify (Map.union temporaryidmap')
     replace x
 
@@ -193,8 +197,8 @@ replaceId permanentids (EdgeRequest properties label sourceid targetid runningid
         replace permanentid = permanentid
 replaceId _ vertexrequest = vertexrequest
 
-chunk :: (Proxy p,Monad m) => x -> p x Neo4jBatchRequest x [Neo4jBatchRequest] m r
-chunk = mapD (\x -> [x])
+chunk :: (Proxy p,Monad m) => Int -> x -> (StateP [a] p) () (Maybe a) b' [a] m r
+chunk n _ = forever (((passUpTo n >-> drawAll) >=> respond) ())
 
 interpretPropertyGraphT :: (Proxy p,Monad m) => PropertyGraphT m r -> x -> (StateP Integer p) a' a b' Neo4jBatchRequest m r
 interpretPropertyGraphT propertygraph x = do
