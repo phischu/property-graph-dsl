@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, StandaloneDeriving #-}
+{-# LANGUAGE OverloadedStrings, StandaloneDeriving, DeriveDataTypeable #-}
 module Database.PropertyGraph.Neo4jBatch (
     runPropertyGraphT) where
 
@@ -7,16 +7,19 @@ import Database.PropertyGraph.Internal (
     VertexId(VertexId),
     PropertyGraphF(NewVertex,NewEdge))
 
-import Control.Proxy (Proxy,Producer,Pipe,Consumer,request,respond,lift,(>->),runProxy)
+import Control.Proxy (Proxy,Producer,Pipe,Consumer,Server,request,respond,lift,(>->),(>~>),runProxyK,toListD,mapD)
+import Control.Proxy.Safe (ExceptionP,SafeIO,runEitherK,throw)
+import qualified Control.Proxy.Safe as Proxy (tryIO)
 import Control.Proxy.Trans (liftP)
 import Control.Proxy.Morph (hoistP)
 import Control.Proxy.Trans.State (StateP,evalStateK,modify,get)
+import Control.Proxy.Trans.Writer (execWriterK)
 
-import Control.Monad (forever,mzero,replicateM)
+import Control.Monad (forever,mzero,replicateM,(>=>))
 import Control.Applicative ((<$>))
 import Control.Monad.IO.Class (MonadIO,liftIO)
 import Control.Monad.Trans.Free (FreeF(Pure,Free),runFreeT)
-import Control.Exception (IOException)
+import Control.Exception (IOException,SomeException,toException,Exception,ErrorCall(ErrorCall))
 
 import Control.Error (EitherT,fmapLT,runEitherT,tryIO,left,fmapL)
 
@@ -30,6 +33,8 @@ import Data.Map (Map)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector (mapM,toList,concat,singleton,empty)
 import qualified Data.Map as Map (union,fromList,lookup,empty)
+import Data.Data (Data)
+import Data.Typeable (Typeable)
 
 import Network.Http.Client (
     Hostname,Port,openConnection,closeConnection,
@@ -50,124 +55,31 @@ data Neo4jBatchError = OpeningConnectionError IOException |
                        RequestSendingError IOException |
                        ResponseReceivalError IOException |
                        ResponseParseError String |
-                       ConnectionClosingError IOException
+                       ConnectionClosingError IOException deriving (Typeable)
 
 data AnyId = Temporary TemporaryId | Permanent PermanentUri deriving (Show,Eq,Ord)
 data TemporaryId = TemporaryId Integer deriving (Show,Eq,Ord)
 data PermanentUri = PermanentUri Text deriving (Show,Eq,Ord)
 
 data Neo4jBatchRequest = VertexRequest Properties TemporaryId
-                       | EdgeRequest Properties Label AnyId AnyId
+                       | EdgeRequest Properties Label AnyId AnyId Integer deriving (Show)
 
-data Neo4jBatchResponses = Neo4jBatchResponses (Vector Neo4jBatchResponse)
-data Neo4jBatchResponse = Neo4jBatchResponse (Maybe Integer) Text (Maybe Text) (Maybe JSON.Value)
+data Neo4jBatchResponses = Neo4jBatchResponses (Vector Neo4jBatchResponse) deriving (Show)
+data Neo4jBatchResponse = Neo4jBatchResponse (Maybe Integer) Text (Maybe Text) (Maybe JSON.Value) deriving (Show)
 
-runPropertyGraphT :: (MonadIO m) => Hostname -> Port -> Int -> PropertyGraphT m r -> m r
-runPropertyGraphT hostname port n propertygraph = runProxy (evalStateK 0 (evalStateK Map.empty (
-    (liftP . (interpretPropertyGraphT propertygraph)) >->
-    chunk n >->
-    ((hoistP liftP) .) (insertPropertyGraphT hostname port))))
+runPropertyGraphT :: Hostname -> Port -> PropertyGraphT SafeIO r -> SafeIO (Either SomeException r)
+runPropertyGraphT hostname port propertygraph = runProxyK (runEitherK (
+    evalStateK 0 (interpretPropertyGraphT propertygraph) >->
+    evalStateK Map.empty replace >->
+    chunk >->
+    (extract >~>
+    consume "localhost" 7474))) []
 
-chunk :: (Proxy p,Monad m,Monad (Pipe p a [a] m)) => Int -> () -> Pipe p a [a] m r
-chunk n () = forever (do
-    xs <- replicateM n (request ())
-    respond xs)
-
-interpretPropertyGraphT :: (Proxy p,Monad m) => PropertyGraphT m r -> () -> Producer (StateP Integer p) Neo4jBatchRequest m r
-interpretPropertyGraphT propertygraph () = do
-
-    next <- lift (runFreeT propertygraph)
-
-    case next of
-
-        Pure x -> return x
-
-        Free (NewVertex properties continue) -> do
-
-            temporaryid <- modify (+1) >> get
-            respond (VertexRequest properties (TemporaryId temporaryid))
-            interpretPropertyGraphT (continue (VertexId temporaryid)) ()
-
-        Free (NewEdge properties label (VertexId sourceid) (VertexId targetid) continue) -> do
-
-            modify (+1)
-            respond (EdgeRequest properties label (Temporary (TemporaryId sourceid)) (Temporary (TemporaryId targetid)))
-            interpretPropertyGraphT continue ()
-
-instance ToJSON Neo4jBatchRequest where
-    toJSON (VertexRequest properties (TemporaryId vertexid)) = JSON.object [
-        "method" .= ("POST" :: Text),
-        "to"     .= ("/node" :: Text),
-        "id"     .= toJSON vertexid,
-        "body"   .= toJSON properties]
-    toJSON (EdgeRequest properties label sourceid targetid) = JSON.object [
-        "method" .= ("POST" :: Text),
-        "to"     .= (vertexidURI sourceid `append` "/relationships"),
-        "body"   .= JSON.object [
-            "to"   .= vertexidURI targetid,
-            "type" .= label,
-            "data" .= properties]]
-
-instance FromJSON Neo4jBatchResponses where
-    parseJSON (JSON.Array array) = do
-        responses <- Vector.mapM parseJSON array
-        return (Neo4jBatchResponses responses)
-    parseJSON _             = fail "responses are no array"
-
-instance FromJSON Neo4jBatchResponse where
-    parseJSON (JSON.Object object) = do
-        temporaryid <- object .:? "id"
-        from        <- object .: "from"
-        location    <- object .:? "location"
-        body        <- object .:? "body"
-        return (Neo4jBatchResponse temporaryid from location body)
-    parseJSON _ = fail "response is not an object"
-
-vertexidURI :: AnyId -> Text
-vertexidURI (Temporary (TemporaryId vertexid)) = pack ("{" ++ show vertexid ++ "}")
-vertexidURI (Permanent (PermanentUri vertexuri)) = vertexuri
-
--- | Insert chunks of batch requests into a neo4j database...
-insertPropertyGraphT :: (Proxy p,MonadIO m) =>
-    Hostname -> Port -> () -> Consumer (StateP (Map TemporaryId PermanentUri) p) [Neo4jBatchRequest] m r
-insertPropertyGraphT hostname port () = forever (do
-
-    requestvalues <- request ()
-
-    permanentids <- get
-
-    result <- liftIO (add hostname port (replaceIds permanentids requestvalues))
-
-    case result of
-        Left e -> liftIO (print e)
-        Right resultvalue -> do
-            case matchTemporaryIds resultvalue of
-                Left e -> liftIO (print e)
-                Right newpermanentids -> modify (Map.union newpermanentids))
-
-replaceIds :: (Map TemporaryId PermanentUri) -> [Neo4jBatchRequest] -> [Neo4jBatchRequest]
-replaceIds permanentids = map (replaceId permanentids)
-
-replaceId :: (Map TemporaryId PermanentUri) -> Neo4jBatchRequest -> Neo4jBatchRequest
-replaceId permanentids (EdgeRequest properties label sourceid targetid) =
-    EdgeRequest properties label (replace sourceid) (replace targetid) where
-        replace (Temporary temporaryid) =
-            maybe (Temporary temporaryid) Permanent
-                (Map.lookup temporaryid permanentids)
-        replace permanentid = permanentid
-replaceId _ vertexrequest = vertexrequest
-
-matchTemporaryIds :: Neo4jBatchResponses -> Either String (Map TemporaryId PermanentUri)
-matchTemporaryIds (Neo4jBatchResponses vector) = do
-    pairs <- Vector.mapM responseToParing vector
-    return (Map.fromList (concat (Vector.toList pairs)))
-
-responseToParing :: Neo4jBatchResponse -> Either String [(TemporaryId,PermanentUri)]
-responseToParing (Neo4jBatchResponse (Just temporaryid) _ (Just completeuri) _) = do
-    case parseURI (unpack completeuri) of
-        Nothing -> Left "couldn't parse uri"
-        Just uri -> return [(TemporaryId temporaryid,PermanentUri (pack (uriPath uri)))]
-responseToParing _ = Right []
+consume :: (Proxy p) => Hostname -> Port -> [Neo4jBatchRequest] -> (ExceptionP p) Neo4jBatchResponses [Neo4jBatchRequest] x' x SafeIO r
+consume hostname port neo4jbatchrequests = do
+    result <- Proxy.tryIO (add hostname port neo4jbatchrequests)
+    neo4jbatchresponses <- either (throw.toException) return result
+    request neo4jbatchresponses >>= consume hostname port
 
 -- | Issue a JSON value representing a neo4j batch request to a neo4j database.
 --   Return the decoded response.
@@ -189,7 +101,7 @@ add hostname port neo4jbatch = runEitherT (do
             tryIO (sendRequest connection request (inputStreamBody bodyInputStream))
                 `onFailure` RequestSendingError
 
-            jsonvalue <- tryIO (receiveResponse connection (\_ responsebody -> (do
+            jsonvalue <- tryIO (receiveResponse connection (\response responsebody -> (do
                 parseFromStream JSON.json responsebody)))
                 `onFailure` ResponseReceivalError
 
@@ -203,6 +115,105 @@ add hostname port neo4jbatch = runEitherT (do
             return responses)
 
 deriving instance Show Neo4jBatchError
+instance Exception Neo4jBatchError
 
 onFailure :: Monad m => EitherT a m r -> (a -> b) -> EitherT b m r
 onFailure = flip fmapLT
+
+instance ToJSON Neo4jBatchRequest where
+    toJSON (VertexRequest properties (TemporaryId vertexid)) = JSON.object [
+        "method" .= ("POST" :: Text),
+        "to"     .= ("/node" :: Text),
+        "id"     .= toJSON vertexid,
+        "body"   .= toJSON properties]
+    toJSON (EdgeRequest properties label sourceid targetid runningid) = JSON.object [
+        "method" .= ("POST" :: Text),
+        "to"     .= (vertexidURI sourceid `append` "/relationships"),
+        "id"     .= toJSON runningid,
+        "body"   .= JSON.object [
+            "to"   .= vertexidURI targetid,
+            "type" .= label,
+            "data" .= properties]]
+
+instance FromJSON Neo4jBatchResponses where
+    parseJSON (JSON.Array array) = do
+        responses <- Vector.mapM parseJSON array
+        return (Neo4jBatchResponses responses)
+    parseJSON _             = fail "responses are no array"
+
+instance FromJSON Neo4jBatchResponse where
+    parseJSON (JSON.Object object) = do
+        temporaryid <- object .:? "id"
+        from        <- object .: "from"
+        location    <- object .:? "location"
+        body        <- object .:? "body"
+        return (Neo4jBatchResponse temporaryid from location body)
+    parseJSON _ = fail "response is not an object"
+
+
+vertexidURI :: AnyId -> Text
+vertexidURI (Temporary (TemporaryId vertexid)) = pack ("{" ++ show vertexid ++ "}")
+vertexidURI (Permanent (PermanentUri vertexuri)) = vertexuri
+
+extract :: (Proxy p,Monad m) => x -> (ExceptionP p) (Map TemporaryId PermanentUri) x Neo4jBatchResponses x m r
+extract x = do
+    neo4jbatchresponses <- respond x
+    let result = matchTemporaryIds neo4jbatchresponses
+    temporaryidmap <- either (throw . ErrorCall) return result
+    request temporaryidmap >>= extract
+
+matchTemporaryIds :: Neo4jBatchResponses -> Either String (Map TemporaryId PermanentUri)
+matchTemporaryIds (Neo4jBatchResponses vector) = do
+    pairs <- Vector.mapM responseToParing vector
+    return (Map.fromList (concat (Vector.toList pairs)))
+
+responseToParing :: Neo4jBatchResponse -> Either String [(TemporaryId,PermanentUri)]
+responseToParing (Neo4jBatchResponse (Just temporaryid) _ (Just completeuri) _) = do
+    case parseURI (unpack completeuri) of
+        Nothing -> Left "couldn't parse uri"
+        Just uri -> return [(TemporaryId temporaryid,PermanentUri (pack (uriPath uri)))]
+responseToParing _ = Right []
+
+replace :: (Proxy p,Monad m) =>
+    x -> (StateP (Map TemporaryId PermanentUri) p) x Neo4jBatchRequest (Map TemporaryId PermanentUri) Neo4jBatchRequest m r
+replace x = do
+    neo4jbatchrequest <- request x
+    temporaryidmap <- get
+    let neo4jbatchrequest' = replaceId temporaryidmap neo4jbatchrequest
+    temporaryidmap' <- respond neo4jbatchrequest'
+    modify (Map.union temporaryidmap')
+    replace x
+
+replaceId :: (Map TemporaryId PermanentUri) -> Neo4jBatchRequest -> Neo4jBatchRequest
+replaceId permanentids (EdgeRequest properties label sourceid targetid runningid) =
+    EdgeRequest properties label (replace sourceid) (replace targetid) runningid where
+        replace (Temporary temporaryid) =
+            maybe (Temporary temporaryid) Permanent
+                (Map.lookup temporaryid permanentids)
+        replace permanentid = permanentid
+replaceId _ vertexrequest = vertexrequest
+
+chunk :: (Proxy p,Monad m) => x -> p x Neo4jBatchRequest x [Neo4jBatchRequest] m r
+chunk = mapD (\x -> [x])
+
+interpretPropertyGraphT :: (Proxy p,Monad m) => PropertyGraphT m r -> x -> (StateP Integer p) a' a b' Neo4jBatchRequest m r
+interpretPropertyGraphT propertygraph x = do
+
+    next <- lift (runFreeT propertygraph)
+
+    case next of
+
+        Pure x -> return x
+
+        Free (NewVertex properties continue) -> do
+
+            temporaryid <- modify (+1) >> get
+            respond (VertexRequest properties (TemporaryId temporaryid))
+            interpretPropertyGraphT (continue (VertexId temporaryid)) x
+
+        Free (NewEdge properties label (VertexId sourceid) (VertexId targetid) continue) -> do
+
+            runningid <- modify (+1) >> get
+            respond (EdgeRequest properties label (Temporary (TemporaryId sourceid)) (Temporary (TemporaryId targetid)) runningid)
+            interpretPropertyGraphT continue x
+
