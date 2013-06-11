@@ -1,6 +1,8 @@
 {-# LANGUAGE StandaloneDeriving #-}
+
 module Database.PropertyGraph.Neo4jSingle (
     runPropertyGraphT,
+    interpretPropertyGraphT,
     Neo4jSingleError(..)) where
 
 import Database.PropertyGraph.Internal (
@@ -12,7 +14,7 @@ import Database.Neo4j (
     lookupNode,getNodeID)
 
 import Control.Monad.Trans.Free (FreeF(Pure,Free),runFreeT)
-import Control.Error (EitherT,left)
+import Control.Error (runEitherT,EitherT,left)
 
 import Data.Map (toList)
 import Data.Text (unpack)
@@ -20,9 +22,13 @@ import Data.Text (unpack)
 import Control.Monad.Trans (lift)
 import Control.Monad.IO.Class (MonadIO,liftIO)
 
--- | Insert a property graph into a neo4j databse.
-runPropertyGraphT :: (MonadIO m) => Client -> PropertyGraphT m a -> EitherT Neo4jSingleError m a
-runPropertyGraphT client propertygraph = do
+-- | Insert a property graph into a neo4j database returning errors as 'Left's.
+runPropertyGraphT :: (MonadIO m) => Client -> PropertyGraphT m a -> m (Either Neo4jSingleError a)
+runPropertyGraphT client propertygraph = runEitherT (interpretPropertyGraphT client propertygraph)
+
+-- | Insert a property graph into a neo4j database return errors in the 'EitherT' monad.
+interpretPropertyGraphT :: (MonadIO m) => Client -> PropertyGraphT m a -> EitherT Neo4jSingleError m a
+interpretPropertyGraphT client propertygraph = do
 
     next <- lift (runFreeT propertygraph)
 
@@ -32,16 +38,16 @@ runPropertyGraphT client propertygraph = do
 
         Free (NewVertex properties continue) -> do
             node <- liftIO (createNode client (toList properties)) >>= either (left . NodeCreationError) return
-            runPropertyGraphT client (continue (VertexId (getNodeID node)))
+            interpretPropertyGraphT client (continue (VertexId (getNodeID node)))
 
         Free (NewEdge properties label (VertexId from) (VertexId to) continue) -> do
             fromNode <- liftIO (lookupNode client from)
                 >>= either (left . NodeLookupError) return
             toNode   <- liftIO (lookupNode client to)
                 >>= either (left . NodeLookupError) return
-            liftIO (createRelationship client fromNode toNode (unpack label) (toList properties))
+            _ <- liftIO (createRelationship client fromNode toNode (unpack label) (toList properties))
                 >>= either (left . RelationshipCreationError) return
-            runPropertyGraphT client continue
+            interpretPropertyGraphT client continue
 
 -- | The different kinds of errors that may occure during insertion of a property
 --   graph into a neo4j database.

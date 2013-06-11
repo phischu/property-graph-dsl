@@ -1,16 +1,16 @@
 module Database.PropertyGraph.Neo4jChunked where
-
+{-
 import Database.PropertyGraph.Internal (
     PropertyGraphT,PropertyGraphF(NewVertex,NewEdge),
     VertexId(VertexId,unVertexId))
 import Database.PropertyGraph.Neo4jBatch (add,vertexRequest,edgeRequest)
 
-import Network.Http.Client (Hostname,Port)
 
-import Control.Proxy (Proxy,Pipe,Producer,Consumer,liftP,request,respond,(>->),runProxy)
-import Control.Proxy.Trans.State (StateP,evalStateK,modify,get)
 
-import Control.Monad (forever,replicateM)
+import Control.Proxy (Proxy,Producer,Consumer,liftP,request,respond,(>->),(>=>),toListD,unitU)
+import Control.Proxy.Trans.State (StateP,modify,get)
+
+import Control.Monad (forever)
 import Control.Monad.IO.Class (MonadIO,liftIO)
 import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Free (FreeF(Pure,Free),runFreeT)
@@ -25,7 +25,7 @@ import qualified Data.HashMap.Strict as HashMap (lookup)
 import qualified Data.Vector as Vector (foldM')
 import Data.Text (pack,unpack)
 
-import qualified Data.Aeson as JSON (Value(Array,Number,String,Object),toJSON)
+import qualified Data.Aeson as JSON (Value(Array,Number,String,Object),json,toJSON)
 import qualified Data.Attoparsec.Number as Attoparsec (Number(I))
 
 import Network.URI (parseURI,uriPath)
@@ -108,9 +108,5 @@ extractIds (JSON.Object object) = do
     existingid <- hush (readErr "cannot read id" existingidstring)
     return (tempid,existingid)
 
--- | Divide a stream into chunks of the given size.
-chunk :: (Monad (p () a () [a] m),Proxy p,Monad m) => Int -> () -> Pipe p a [a] m r
-chunk n () = forever (do
-    xs <- replicateM n (request ())
-    respond xs)
-
+chunk p = (liftP . p >-> toListD >-> unitU) >=> respond
+-}

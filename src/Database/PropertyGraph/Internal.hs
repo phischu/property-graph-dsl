@@ -8,7 +8,6 @@ import Control.Monad.Identity (Identity)
 import Data.Text (Text)
 import Data.Map (Map)
 
-import Data.Aeson (ToJSON)
 import qualified Data.Aeson as JSON (Value)
 
 -- | A monadic property graph dsl. A property graph consists of
@@ -36,13 +35,12 @@ type Value = JSON.Value
 
 -- | A unique identifier for vertices. Internally an Integer but
 --   kept abstract to prevent disaster.
-newtype VertexId = VertexId { unVertexId :: Integer }
+newtype VertexId = VertexId Integer
 
 -- | Each edge is required to have a textual label.
 type Label = Text
 
 deriving instance Functor PropertyGraphF
-deriving instance ToJSON  VertexId
 
 -- | Within the property graph monad create a new vertex with the
 --   given properties. The resulting 'VertexId' can be bound and used
