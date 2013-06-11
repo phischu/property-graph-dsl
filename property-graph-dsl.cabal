@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                property-graph-dsl
-version:             0.7.0.0
+version:             0.7.0.1
 synopsis:            A DSL for defining property graphs
 -- description:         
 homepage:            userpages.uni-koblenz.de/~pschuster
@@ -37,8 +37,6 @@ library
                        neo4j-haskell,
                        pipes,
                        attoparsec,
-                       unordered-containers,
-                       split,
                        pipes-parse
   hs-source-dirs:      src
   default-language:    Haskell2010
