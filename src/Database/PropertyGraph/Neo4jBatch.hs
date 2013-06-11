@@ -69,10 +69,10 @@ data Neo4jBatchRequest = VertexRequest Properties TemporaryId
 data Neo4jBatchResponses = Neo4jBatchResponses (Vector Neo4jBatchResponse) deriving (Show)
 data Neo4jBatchResponse = Neo4jBatchResponse (Maybe Integer) Text (Maybe Text) (Maybe JSON.Value) deriving (Show)
 
-runPropertyGraphT :: Hostname -> Port -> PropertyGraphT SafeIO r -> SafeIO (Either SomeException r)
-runPropertyGraphT hostname port propertygraph = runProxyK (runEitherK (
+runPropertyGraphT :: Hostname -> Port -> Int -> PropertyGraphT SafeIO r -> SafeIO (Either SomeException r)
+runPropertyGraphT hostname port n propertygraph = runProxyK (runEitherK (
     wrap . (evalStateK 0 (interpretPropertyGraphT propertygraph)) >->
-    evalStateK [] (chunk 1000) >->
+    evalStateK [] (chunk n) >->
     evalStateK Map.empty replace >->
     (extract >~>
     consume "localhost" 7474))) []

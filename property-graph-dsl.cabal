@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                property-graph-dsl
-version:             0.6.0.4
+version:             0.6.0.5
 synopsis:            A DSL for defining property graphs
 -- description:         
 homepage:            userpages.uni-koblenz.de/~pschuster
@@ -19,8 +19,7 @@ library
   exposed-modules:     Database.PropertyGraph,
                        Database.PropertyGraph.Internal,
                        Database.PropertyGraph.Neo4jSingle,
-                       Database.PropertyGraph.Neo4jBatch,
-                       Database.PropertyGraph.Neo4jChunked
+                       Database.PropertyGraph.Neo4jBatch
   -- other-modules:       
   build-depends:       base,
                        containers,
