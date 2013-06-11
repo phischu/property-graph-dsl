@@ -45,7 +45,7 @@ interpretPropertyGraphT client propertygraph = do
                 >>= either (left . NodeLookupError) return
             toNode   <- liftIO (lookupNode client to)
                 >>= either (left . NodeLookupError) return
-            liftIO (createRelationship client fromNode toNode (unpack label) (toList properties))
+            _ <- liftIO (createRelationship client fromNode toNode (unpack label) (toList properties))
                 >>= either (left . RelationshipCreationError) return
             interpretPropertyGraphT client continue
 

@@ -8,7 +8,6 @@ import Control.Monad.Identity (Identity)
 import Data.Text (Text)
 import Data.Map (Map)
 
-import Data.Aeson (ToJSON)
 import qualified Data.Aeson as JSON (Value)
 
 -- | A monadic property graph dsl. A property graph consists of
