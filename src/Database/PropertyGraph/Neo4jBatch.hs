@@ -13,7 +13,7 @@ import Control.Proxy.Parse (drawAll,passUpTo,wrap)
 import Control.Proxy.Trans.State (StateP,evalStateK,modify,get)
 import Control.Proxy.Trans.Either (EitherP,runEitherK,throw)
 
-import Control.Monad (forever,(>=>))
+import Control.Monad (forever,(>=>),forM_)
 import Control.Monad.IO.Class (MonadIO,liftIO)
 import Control.Monad.Trans.Free (FreeF(Pure,Free),runFreeT)
 import Control.Exception (IOException)
@@ -77,10 +77,12 @@ interpretPropertyGraphT propertygraph x = do
 
         Pure result -> return result
 
-        Free (NewVertex properties continue) -> do
+        Free (NewVertex properties labels continue) -> do
 
             temporaryid <- modify (+1) >> get
             _ <- respond (VertexRequest properties (TemporaryId temporaryid))
+            runningid <- modify (+1) >> get
+            _ <- forM_ labels (\label -> respond (VertexLabelRequest label (TemporaryId temporaryid) runningid))
             interpretPropertyGraphT (continue (VertexId temporaryid)) x
 
         Free (NewEdge properties label (VertexId sourceid) (VertexId targetid) continue) -> do
@@ -211,6 +213,11 @@ instance ToJSON Neo4jBatchRequest where
             "to"   .= vertexidURI targetid,
             "type" .= label,
             "data" .= properties]]
+    toJSON (VertexLabelRequest label temporaryid runningid) = JSON.object [
+        "method" .= ("POST" :: Text),
+        "to"     .= (vertexidURI (Temporary temporaryid) `append` "/labels"),
+        "id"     .= toJSON runningid,
+        "body"   .= toJSON label]
 
 instance FromJSON Neo4jBatchResponses where
     parseJSON (JSON.Array array) = do
@@ -245,7 +252,8 @@ data PermanentUri = PermanentUri Text deriving (Show,Eq,Ord)
 -- | A single neo4j request. Either a request to create a Vertex or
 --   a request to create an edge.
 data Neo4jBatchRequest = VertexRequest Properties TemporaryId
-                       | EdgeRequest Properties Label AnyId AnyId Integer deriving (Show)
+                       | EdgeRequest Properties Label AnyId AnyId Integer
+                       | VertexLabelRequest Label TemporaryId Integer deriving (Show)
 
 -- | A neo4j batch response. It is a vector of multiple single responses.
 data Neo4jBatchResponses = Neo4jBatchResponses (Vector Neo4jBatchResponse) deriving (Show)

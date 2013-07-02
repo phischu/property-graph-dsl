@@ -20,7 +20,7 @@ type PropertyGraph = PropertyGraphT Identity
 type PropertyGraphT = FreeT PropertyGraphF
 
 data PropertyGraphF a =
-	NewVertex Properties (VertexId -> a) |
+	NewVertex Properties [Label] (VertexId -> a) |
 	NewEdge Properties Label VertexId VertexId a
 
 -- | The properties of either a vertex or an edge. Represented as
@@ -45,8 +45,8 @@ deriving instance Functor PropertyGraphF
 -- | Within the property graph monad create a new vertex with the
 --   given properties. The resulting 'VertexId' can be bound and used
 --   subsequently.
-newVertex :: (Monad m) => Properties -> PropertyGraphT m VertexId
-newVertex properties = liftF (NewVertex properties id)
+newVertex :: (Monad m) => Properties -> [Label] -> PropertyGraphT m VertexId
+newVertex properties labels = liftF (NewVertex properties labels id)
 
 -- | Withing the property graph monad create a new edge with the given
 --   properties and label. It goes from the vertex with the first given

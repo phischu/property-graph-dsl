@@ -36,7 +36,7 @@ interpretPropertyGraphT client propertygraph = do
 
         Pure x -> return x
 
-        Free (NewVertex properties continue) -> do
+        Free (NewVertex properties _ continue) -> do
             node <- liftIO (createNode client (toList properties)) >>= either (left . NodeCreationError) return
             interpretPropertyGraphT client (continue (VertexId (getNodeID node)))
 
