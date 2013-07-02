@@ -13,7 +13,7 @@ import Control.Proxy.Parse (drawAll,passUpTo,wrap)
 import Control.Proxy.Trans.State (StateP,evalStateK,modify,get)
 import Control.Proxy.Trans.Either (EitherP,runEitherK,throw)
 
-import Control.Monad (forever,(>=>),forM_)
+import Control.Monad (forever,(>=>),forM_,when)
 import Control.Monad.IO.Class (MonadIO,liftIO)
 import Control.Monad.Trans.Free (FreeF(Pure,Free),runFreeT)
 import Control.Exception (IOException)
@@ -36,7 +36,7 @@ import Network.Http.Client (
     Hostname,Port,openConnection,closeConnection,
     buildRequest,http,Method(POST),setAccept,setContentType,
     sendRequest,inputStreamBody,
-    receiveResponse)
+    receiveResponse,getStatusCode)
 import qualified Data.ByteString.Char8 as BS (pack)
 
 import System.IO.Streams.ByteString (fromLazyByteString)
@@ -60,6 +60,7 @@ data Neo4jBatchError = OpeningConnectionError IOException |
                        EncodingError IOException |
                        RequestSendingError IOException |
                        ResponseReceivalError IOException |
+                       ResponseCodeError Int String |
                        ResponseParseError String |
                        ConnectionClosingError IOException |
                        IdMapExtractionError String
@@ -182,9 +183,13 @@ add hostname port neo4jbatch = runEitherT (do
             tryIO (sendRequest connection httprequest (inputStreamBody bodyInputStream))
                 `onFailure` RequestSendingError
 
-            jsonvalue <- tryIO (receiveResponse connection (\_ responsebody -> (do
-                parseFromStream JSON.json responsebody)))
+            (responsecode,jsonvalue) <- tryIO (receiveResponse connection (\responseheader responsebody -> (do
+                result <- parseFromStream JSON.json responsebody
+                return (getStatusCode responseheader,result))))
                 `onFailure` ResponseReceivalError
+
+            when (responsecode < 200 || responsecode > 299)
+                (left (ResponseCodeError responsecode (show (JSON.encode jsonvalue))))
 
             responses <- case fromJSON jsonvalue of
                 Error e        -> left (ResponseParseError e)
