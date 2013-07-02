@@ -83,7 +83,8 @@ interpretPropertyGraphT propertygraph x = do
             temporaryid <- modify (+1) >> get
             _ <- respond (VertexRequest properties (TemporaryId temporaryid))
             runningid <- modify (+1) >> get
-            _ <- forM_ labels (\label -> respond (VertexLabelRequest label (TemporaryId temporaryid) runningid))
+            _ <- forM_ labels (\label ->
+                respond (VertexLabelRequest label (Temporary (TemporaryId temporaryid)) runningid))
             interpretPropertyGraphT (continue (VertexId temporaryid)) x
 
         Free (NewEdge properties label (VertexId sourceid) (VertexId targetid) continue) -> do
@@ -116,13 +117,25 @@ replace x = do
 -- | Replaces all temporary ids in a single request by their matching permanent uri
 --   if the temporary ids are found in the given map.
 replaceId :: (Map TemporaryId PermanentUri) -> Neo4jBatchRequest -> Neo4jBatchRequest
-replaceId permanentids (EdgeRequest properties label sourceid targetid runningid) =
-    EdgeRequest properties label (maybeReplace sourceid) (maybeReplace targetid) runningid where
-        maybeReplace (Temporary temporaryid) =
-            maybe (Temporary temporaryid) Permanent
-                (Map.lookup temporaryid permanentids)
-        maybeReplace permanentid = permanentid
+replaceId permanentids (EdgeRequest properties label sourceid targetid runningid) = EdgeRequest
+    properties
+    label
+    (maybeReplace permanentids sourceid)
+    (maybeReplace permanentids targetid)
+    runningid
+replaceId permanentids (VertexLabelRequest label vertexid runningid) = VertexLabelRequest
+    label
+    (maybeReplace permanentids vertexid)
+    runningid
 replaceId _ vertexrequest = vertexrequest
+
+-- | Given a map from permanent to temporary ids replace the given id if it is
+--   temporary and found by the found permanent uri.
+maybeReplace permanentids (Temporary temporaryid) = maybe
+    (Temporary temporaryid)
+    Permanent
+    (Map.lookup temporaryid permanentids)
+maybeReplace _ permanentid = permanentid
 
 -- | Extracts a map from temporary id to permanent uri from the neo4j batch responses flowing
 --   upstream.
@@ -218,9 +231,9 @@ instance ToJSON Neo4jBatchRequest where
             "to"   .= vertexidURI targetid,
             "type" .= label,
             "data" .= properties]]
-    toJSON (VertexLabelRequest label temporaryid runningid) = JSON.object [
+    toJSON (VertexLabelRequest label vertexid runningid) = JSON.object [
         "method" .= ("POST" :: Text),
-        "to"     .= (vertexidURI (Temporary temporaryid) `append` "/labels"),
+        "to"     .= (vertexidURI vertexid `append` "/labels"),
         "id"     .= toJSON runningid,
         "body"   .= toJSON label]
 
@@ -258,7 +271,7 @@ data PermanentUri = PermanentUri Text deriving (Show,Eq,Ord)
 --   a request to create an edge.
 data Neo4jBatchRequest = VertexRequest Properties TemporaryId
                        | EdgeRequest Properties Label AnyId AnyId Integer
-                       | VertexLabelRequest Label TemporaryId Integer deriving (Show)
+                       | VertexLabelRequest Label AnyId Integer deriving (Show)
 
 -- | A neo4j batch response. It is a vector of multiple single responses.
 data Neo4jBatchResponses = Neo4jBatchResponses (Vector Neo4jBatchResponse) deriving (Show)
